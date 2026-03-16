@@ -76,7 +76,7 @@ class BearTrendFollow:
         take_profit = price - atr * 3.5
         rr = abs(price - take_profit) / abs(stop_loss - price) if abs(stop_loss - price) > 0 else 0
 
-        if confidence < 50 or rr < config.RISK["min_risk_reward"]:
+        if confidence < 40 or rr < config.RISK["min_risk_reward"]:
             return Signal(
                 signal_type=SignalType.NO_SIGNAL, strategy=self.name,
                 symbol=symbol, confidence=0, entry_price=price,
@@ -186,7 +186,7 @@ class BearMeanReversion:
         take_profit = min(last["bb_middle"], last["ema_medium"])
         rr = abs(take_profit - price) / abs(price - stop_loss) if abs(price - stop_loss) > 0 else 0
 
-        if confidence < 50 or rr < config.RISK["min_risk_reward"]:
+        if confidence < 40 or rr < config.RISK["min_risk_reward"]:
             return Signal(
                 signal_type=SignalType.NO_SIGNAL, strategy=self.name,
                 symbol=symbol, confidence=0, entry_price=price,
@@ -292,7 +292,7 @@ class BearBreakdown:
         take_profit = price - atr * 4.0
         rr = abs(price - take_profit) / abs(stop_loss - price) if abs(stop_loss - price) > 0 else 0
 
-        if confidence < 50 or rr < config.RISK["min_risk_reward"]:
+        if confidence < 40 or rr < config.RISK["min_risk_reward"]:
             return Signal(
                 signal_type=SignalType.NO_SIGNAL, strategy=self.name,
                 symbol=symbol, confidence=0, entry_price=price,
@@ -404,7 +404,7 @@ class BearScalp:
             tp = price - atr * 1.5
             rr = abs(price - tp) / abs(sl - price) if abs(sl - price) > 0 else 0
 
-            if confidence >= 50 and rr >= 1.2:
+            if confidence >= 40 and rr >= 1.2:
                 return Signal(
                     signal_type=SignalType.SHORT, strategy=self.name,
                     symbol=symbol, confidence=confidence, entry_price=price,
@@ -419,7 +419,7 @@ class BearScalp:
             tp = price + atr * 1.5
             rr = abs(tp - price) / abs(price - sl) if abs(price - sl) > 0 else 0
 
-            if confidence >= 50 and rr >= 1.2:
+            if confidence >= 40 and rr >= 1.2:
                 return Signal(
                     signal_type=SignalType.LONG, strategy=self.name,
                     symbol=symbol, confidence=confidence, entry_price=price,

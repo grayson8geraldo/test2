@@ -58,7 +58,7 @@ class Signal:
 
     @property
     def is_actionable(self) -> bool:
-        return self.signal_type not in (SignalType.NO_SIGNAL,) and self.confidence >= 50
+        return self.signal_type not in (SignalType.NO_SIGNAL,) and self.confidence >= 40
 
 
 @dataclass

@@ -53,6 +53,9 @@ class TradingEngine:
         self.learner = SelfLearner()
         self.running = False
 
+        # Cache for indicator dataframes (avoid re-fetching in same cycle)
+        self._cycle_data: dict[str, pd.DataFrame] = {}
+
         # Initialize strategies with learned weights
         self.strategies = self._init_strategies()
 
@@ -116,32 +119,46 @@ class TradingEngine:
     async def _trading_cycle(self):
         """Execute one full trading cycle."""
         try:
-            # 1. Monitor open positions first
+            # Clear data cache for this cycle
+            self._cycle_data.clear()
+
+            # 1. Fetch data for all pairs first (used by both monitoring and signals)
+            for pair in config.TRADING_PAIRS:
+                try:
+                    df = await self.exchange.fetch_ohlcv(pair, config.TIMEFRAMES["entry"])
+                    if len(df) >= 60:
+                        self._cycle_data[pair] = compute_all(df, self.learner.get_indicator_params())
+                except Exception as e:
+                    log.warning(f"Data fetch failed for {pair}: {e}")
+
+            # 2. Monitor open positions
             await self._monitor_positions()
 
-            # 2. Check if self-learning should trigger
+            # 3. Check if self-learning should trigger
             self._check_learning()
 
-            # 3. Scan for new opportunities
+            # 4. Scan for new opportunities
             all_signals = []
             for pair in config.TRADING_PAIRS:
-                # Check pair score from learner
                 pair_score = self.learner.get_pair_score(pair)
                 if pair_score < 0.3:
-                    continue  # Skip underperforming pairs
+                    continue
 
                 signals = await self._analyze_pair(pair)
                 all_signals.extend(signals)
 
-            # 4. Rank and filter signals
+            # 5. Rank and filter signals
             actionable = [s for s in all_signals if s.is_actionable]
             actionable.sort(key=lambda s: s.confidence * s.risk_reward, reverse=True)
 
-            # 5. Execute top signals
+            # 6. Execute top signals
             for signal in actionable:
                 valid, reason = self.risk_manager.validate_signal(signal)
                 if valid:
                     await self._execute_signal(signal)
+                    log.info(f"  Signal accepted: {signal.signal_type.value} {signal.symbol} conf={signal.confidence:.0f} RR={signal.risk_reward:.1f}")
+                elif reason not in ("Already in " + signal.symbol, "Signal not actionable"):
+                    log.debug(f"  Signal rejected: {signal.symbol} — {reason}")
 
         except Exception as e:
             log.error(f"Trading cycle error: {e}", exc_info=True)
@@ -151,24 +168,14 @@ class TradingEngine:
         signals = []
 
         try:
-            # Fetch real multi-timeframe data
-            data = await self.exchange.fetch_multi_timeframe(
-                symbol, config.TIMEFRAMES
-            )
-
-            if "entry" not in data or len(data["entry"]) < 60:
-                return signals
-
-            # Compute indicators on entry timeframe with learned adjustments
-            indicator_params = self.learner.get_indicator_params()
-            df = compute_all(data["entry"], params=indicator_params)
-
-            # Add context from higher timeframe
-            if "context" in data and len(data["context"]) > 20:
-                df_context = compute_all(data["context"], params=indicator_params)
-                last_ctx = df_context.iloc[-1]
-                df["htf_bear"] = last_ctx.get("ema_bear_aligned", 0)
-                df["htf_adx"] = last_ctx.get("adx", 0)
+            # Use cached data if available
+            df = self._cycle_data.get(symbol)
+            if df is None:
+                data = await self.exchange.fetch_ohlcv(symbol, config.TIMEFRAMES["entry"])
+                if len(data) < 60:
+                    return signals
+                df = compute_all(data, self.learner.get_indicator_params())
+                self._cycle_data[symbol] = df
 
             # Evaluate each strategy
             for strategy in self.strategies:
@@ -187,15 +194,12 @@ class TradingEngine:
     async def _execute_signal(self, signal: Signal):
         """Execute a trading signal (paper or live)."""
         try:
-            # Calculate position size
             quantity = self.risk_manager.calculate_position_size(signal)
             if quantity <= 0:
                 return
 
-            # Determine order side
             side = "sell" if signal.signal_type == SignalType.SHORT else "buy"
 
-            # Place market order (paper or live)
             order = await self.exchange.create_market_order(
                 signal.symbol, side, quantity
             )
@@ -203,7 +207,6 @@ class TradingEngine:
             fill_price = order.get("average", signal.entry_price)
             fees = order.get("fee", {}).get("cost", 0) or 0
 
-            # Create trade record
             trade = Trade(
                 trade_id=str(uuid.uuid4())[:8],
                 symbol=signal.symbol,
@@ -221,7 +224,6 @@ class TradingEngine:
 
             self.risk_manager.register_open(trade)
 
-            # Place SL/TP orders (virtual in paper mode)
             sl_side = "buy" if signal.signal_type == SignalType.SHORT else "sell"
             try:
                 await self.exchange.create_stop_loss_order(
@@ -238,10 +240,28 @@ class TradingEngine:
 
     async def _monitor_positions(self):
         """Monitor open positions for exits."""
+        if not self.risk_manager.open_trades:
+            return
+
         for trade in list(self.risk_manager.open_trades):
             try:
                 ticker = await self.exchange.fetch_ticker(trade.symbol)
                 current_price = ticker["last"]
+
+                # Calculate unrealized PnL
+                if trade.signal_type == SignalType.SHORT:
+                    unrealized = (trade.entry_price - current_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+                else:
+                    unrealized = (current_price - trade.entry_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+
+                pnl_pct = unrealized / (trade.quantity * trade.entry_price / trade.leverage) * 100
+
+                log.info(
+                    f"  POS {trade.signal_type.value} {trade.symbol} "
+                    f"entry={trade.entry_price:.2f} now={current_price:.2f} "
+                    f"uPnL={unrealized:+.2f} ({pnl_pct:+.1f}%) "
+                    f"SL={trade.stop_loss:.2f} TP={trade.take_profit:.2f}"
+                )
 
                 # Check stop loss
                 if self.risk_manager.check_stop_loss(trade, current_price):
@@ -256,10 +276,9 @@ class TradingEngine:
                 # Update trailing stop
                 self.risk_manager.update_trailing_stop(trade, current_price)
 
-                # Check strategy-based exit
-                data = await self.exchange.fetch_ohlcv(trade.symbol, config.TIMEFRAMES["entry"])
-                if len(data) > 30:
-                    df = compute_all(data, self.learner.get_indicator_params())
+                # Check strategy-based exit using cached data
+                df = self._cycle_data.get(trade.symbol)
+                if df is not None and len(df) > 30:
                     for strategy in self.strategies:
                         if strategy.name == trade.strategy:
                             should_exit, reason = strategy.check_exit(df)
@@ -268,7 +287,7 @@ class TradingEngine:
                                 break
 
             except Exception as e:
-                log.warning(f"Error monitoring {trade.symbol}: {e}")
+                log.error(f"Error monitoring {trade.symbol}: {e}", exc_info=True)
 
     async def _close_trade(self, trade: Trade, exit_price: float, reason: str):
         """Close a trade and record results."""
@@ -332,12 +351,15 @@ class TradingEngine:
         # Log periodic status
         progress = (balance - config.INITIAL_DEPOSIT) / (config.TARGET_BALANCE - config.INITIAL_DEPOSIT) * 100
         mode_tag = "[PAPER]" if self.paper_mode else "[LIVE]"
+        open_count = len(self.risk_manager.open_trades)
+        open_symbols = ", ".join(t.symbol for t in self.risk_manager.open_trades) or "none"
         log.info(
             f"{mode_tag} Balance=${balance:.2f} | "
             f"Progress={progress:.1f}% | "
             f"Trades={stats['total_trades']} | "
             f"WR={stats['win_rate']:.1%} | "
-            f"DD={stats['max_drawdown_pct']:.1f}%"
+            f"DD={stats['max_drawdown_pct']:.1f}% | "
+            f"Open={open_count} ({open_symbols})"
         )
 
     async def _shutdown(self):
@@ -345,7 +367,6 @@ class TradingEngine:
         log.info("Shutting down...")
         self.risk_manager.save_trades()
 
-        # Close all open positions
         for trade in list(self.risk_manager.open_trades):
             try:
                 ticker = await self.exchange.fetch_ticker(trade.symbol)

@@ -50,7 +50,7 @@ RISK = {
     "default_sl_pct": 1.5,               # stop-loss percentage
     "default_tp_pct": 3.0,               # take-profit percentage
     "trailing_stop_pct": 1.0,            # trailing stop activation
-    "min_risk_reward": 1.8,              # minimum R:R ratio
+    "min_risk_reward": 1.5,              # minimum R:R ratio (aggressive for small deposit)
     "scale_in_enabled": True,            # allow scaling into positions
     "scale_in_max_adds": 2,              # max scale-in additions
 }
