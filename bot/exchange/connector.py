@@ -1,6 +1,6 @@
 """
 Exchange connector using ccxt library.
-Supports Binance futures with testnet option.
+Supports Bybit futures with testnet option.
 """
 
 import asyncio
@@ -33,7 +33,7 @@ class ExchangeConnector:
             "secret": config.API_SECRET,
             "enableRateLimit": True,
             "options": {
-                "defaultType": "future",
+                "defaultType": "linear",
                 "adjustForTimeDifference": True,
             },
         }

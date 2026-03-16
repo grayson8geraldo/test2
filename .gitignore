@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/trades.json
 data/learning_state.json
+data/paper_state.json
 logs/
 .venv/
 venv/

@@ -202,9 +202,9 @@ class Backtester:
 
     def _fetch_historical_data(self) -> dict[str, pd.DataFrame]:
         """Fetch historical OHLCV data using synchronous ccxt."""
-        exchange = ccxt.binance({
+        exchange = ccxt.bybit({
             "enableRateLimit": True,
-            "options": {"defaultType": "future"},
+            "options": {"defaultType": "linear"},
         })
 
         datasets = {}

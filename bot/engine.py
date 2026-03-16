@@ -1,12 +1,16 @@
 """
 Main Trading Engine — orchestrates all components.
 
+Supports two modes:
+- Paper trading (default): Virtual balance on real market data from Bybit
+- Live trading: Real orders on Bybit
+
 Flow:
-1. Fetch market data for all pairs and timeframes
+1. Fetch real market data for all pairs and timeframes
 2. Compute indicators
 3. Evaluate all strategies, collect signals
 4. Filter signals through risk manager
-5. Execute best signals
+5. Execute best signals (paper or live)
 6. Monitor open positions (SL/TP/trailing)
 7. Trigger self-learning after every 20 closed trades
 8. Repeat
@@ -19,7 +23,6 @@ from datetime import datetime
 import pandas as pd
 
 import config
-from bot.exchange.connector import ExchangeConnector
 from bot.indicators.technical import compute_all
 from bot.learning.self_learner import SelfLearner
 from bot.strategies.base import Signal, SignalType, StrategyName, Trade
@@ -36,11 +39,19 @@ from bot.utils.logger import log
 class TradingEngine:
 
     def __init__(self):
-        self.exchange = ExchangeConnector()
+        # Choose connector based on mode
+        if config.PAPER_TRADING:
+            from bot.exchange.paper_trader import PaperTrader
+            self.exchange = PaperTrader()
+            self.paper_mode = True
+        else:
+            from bot.exchange.connector import ExchangeConnector
+            self.exchange = ExchangeConnector()
+            self.paper_mode = False
+
         self.risk_manager = RiskManager()
         self.learner = SelfLearner()
         self.running = False
-        self._last_learning_count = 0
 
         # Initialize strategies with learned weights
         self.strategies = self._init_strategies()
@@ -56,12 +67,16 @@ class TradingEngine:
 
     async def start(self):
         """Start the trading bot main loop."""
+        mode = "PAPER TRADING" if self.paper_mode else "LIVE TRADING"
         log.info("=" * 60)
-        log.info("BEAR MARKET CRYPTO TRADING BOT STARTING")
+        log.info(f"BEAR MARKET CRYPTO BOT — {mode}")
+        log.info(f"Exchange: {config.EXCHANGE}")
         log.info(f"Initial deposit: ${config.INITIAL_DEPOSIT}")
         log.info(f"Target: ${config.TARGET_BALANCE}")
         log.info(f"Pairs: {config.TRADING_PAIRS}")
         log.info(f"Leverage: {config.RISK['leverage']}x")
+        if self.paper_mode:
+            log.info(f"Paper fee: {config.PAPER_FEE_PCT}% | Slippage: {config.PAPER_SLIPPAGE_PCT}%")
         log.info("=" * 60)
 
         await self.exchange.connect()
@@ -72,6 +87,11 @@ class TradingEngine:
 
         # Load previous state
         self.risk_manager.load_trades()
+
+        # Sync balance from paper trader if in paper mode
+        if self.paper_mode:
+            self.risk_manager.balance = self.exchange.get_virtual_balance()
+
         stats = self.risk_manager.get_stats()
         log.info(f"Loaded state: Balance=${stats['balance']:.2f}, Trades={stats['total_trades']}")
 
@@ -131,7 +151,7 @@ class TradingEngine:
         signals = []
 
         try:
-            # Fetch multi-timeframe data
+            # Fetch real multi-timeframe data
             data = await self.exchange.fetch_multi_timeframe(
                 symbol, config.TIMEFRAMES
             )
@@ -147,7 +167,6 @@ class TradingEngine:
             if "context" in data and len(data["context"]) > 20:
                 df_context = compute_all(data["context"], params=indicator_params)
                 last_ctx = df_context.iloc[-1]
-                # Market regime from 1h
                 df["htf_bear"] = last_ctx.get("ema_bear_aligned", 0)
                 df["htf_adx"] = last_ctx.get("adx", 0)
 
@@ -166,7 +185,7 @@ class TradingEngine:
         return signals
 
     async def _execute_signal(self, signal: Signal):
-        """Execute a trading signal."""
+        """Execute a trading signal (paper or live)."""
         try:
             # Calculate position size
             quantity = self.risk_manager.calculate_position_size(signal)
@@ -176,7 +195,7 @@ class TradingEngine:
             # Determine order side
             side = "sell" if signal.signal_type == SignalType.SHORT else "buy"
 
-            # Place market order
+            # Place market order (paper or live)
             order = await self.exchange.create_market_order(
                 signal.symbol, side, quantity
             )
@@ -202,7 +221,7 @@ class TradingEngine:
 
             self.risk_manager.register_open(trade)
 
-            # Place SL/TP orders
+            # Place SL/TP orders (virtual in paper mode)
             sl_side = "buy" if signal.signal_type == SignalType.SHORT else "sell"
             try:
                 await self.exchange.create_stop_loss_order(
@@ -254,7 +273,6 @@ class TradingEngine:
     async def _close_trade(self, trade: Trade, exit_price: float, reason: str):
         """Close a trade and record results."""
         try:
-            # Place close order
             side = "sell" if trade.signal_type == SignalType.SHORT else "buy"
             await self.exchange.close_position(trade.symbol, side, trade.quantity)
             await self.exchange.cancel_all_orders(trade.symbol)
@@ -278,6 +296,10 @@ class TradingEngine:
 
         self.risk_manager.register_close(trade)
         self.risk_manager.save_trades()
+
+        # Sync virtual balance in paper mode
+        if self.paper_mode:
+            self.exchange.update_balance(pnl)
 
     def _check_learning(self):
         """Check if self-learning should trigger."""
@@ -304,14 +326,14 @@ class TradingEngine:
         if balance >= config.TARGET_BALANCE:
             log.info(f"TARGET REACHED! Balance: ${balance:.2f} >= ${config.TARGET_BALANCE}")
             log.info("Switching to conservative mode...")
-            # Reduce risk on target hit
             config.RISK["max_risk_per_trade_pct"] = 1.0
             config.RISK["leverage"] = 5
 
         # Log periodic status
         progress = (balance - config.INITIAL_DEPOSIT) / (config.TARGET_BALANCE - config.INITIAL_DEPOSIT) * 100
+        mode_tag = "[PAPER]" if self.paper_mode else "[LIVE]"
         log.info(
-            f"Status: Balance=${balance:.2f} | "
+            f"{mode_tag} Balance=${balance:.2f} | "
             f"Progress={progress:.1f}% | "
             f"Trades={stats['total_trades']} | "
             f"WR={stats['win_rate']:.1%} | "

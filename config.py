@@ -9,10 +9,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Exchange settings
-EXCHANGE = os.getenv("EXCHANGE", "binance")
+EXCHANGE = os.getenv("EXCHANGE", "bybit")
 API_KEY = os.getenv("API_KEY", "")
 API_SECRET = os.getenv("API_SECRET", "")
 USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"
+
+# Paper trading (virtual balance) — trades on real market data, no real orders
+PAPER_TRADING = os.getenv("PAPER_TRADING", "true").lower() == "true"
+PAPER_FEE_PCT = float(os.getenv("PAPER_FEE_PCT", "0.06"))  # Bybit taker fee
+PAPER_SLIPPAGE_PCT = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.05"))  # simulated slippage
 
 # Trading pairs optimized for bear market volatility
 TRADING_PAIRS = [
