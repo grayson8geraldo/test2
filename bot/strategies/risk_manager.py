@@ -10,12 +10,25 @@ Key principles for $200 -> $1200 in bear market:
 """
 
 import json
+import math
 import os
 from datetime import datetime, timedelta
 
 import config
 from bot.strategies.base import Signal, SignalType, Trade
 from bot.utils.logger import log
+
+
+def _fmt_price(price: float) -> str:
+    """Format price with appropriate decimal places based on magnitude."""
+    if price >= 100:
+        return f"{price:.2f}"
+    elif price >= 1:
+        return f"{price:.4f}"
+    elif price >= 0.01:
+        return f"{price:.6f}"
+    else:
+        return f"{price:.8f}"
 
 
 class RiskManager:
@@ -33,10 +46,10 @@ class RiskManager:
         """Check if we are allowed to open new positions."""
         self._reset_daily_if_needed()
 
-        # Daily loss limit
-        daily_loss_limit = self.balance * config.RISK["max_daily_loss_pct"] / 100
+        # Daily loss limit — use peak balance to avoid shrinking limit after losses
+        daily_loss_limit = self.peak_balance * config.RISK["max_daily_loss_pct"] / 100
         if self.daily_pnl < -daily_loss_limit:
-            return False, f"Daily loss limit hit ({self.daily_pnl:.2f})"
+            return False, f"Daily loss limit hit ({self.daily_pnl:.2f} < -{daily_loss_limit:.2f})"
 
         # Max open positions
         if len(self.open_trades) >= config.RISK["max_open_positions"]:
@@ -112,10 +125,13 @@ class RiskManager:
         """Register a new open trade."""
         self.open_trades.append(trade)
         self.daily_trades += 1
+        sl_pct = abs(trade.stop_loss - trade.entry_price) / trade.entry_price * 100
+        tp_pct = abs(trade.take_profit - trade.entry_price) / trade.entry_price * 100
         log.info(
             f"OPEN {trade.signal_type.value} {trade.symbol} "
-            f"@ {trade.entry_price:.2f} qty={trade.quantity:.6f} "
-            f"SL={trade.stop_loss:.2f} TP={trade.take_profit:.2f}"
+            f"@ {_fmt_price(trade.entry_price)} qty={trade.quantity:.6f} "
+            f"SL={_fmt_price(trade.stop_loss)} ({sl_pct:.1f}%) "
+            f"TP={_fmt_price(trade.take_profit)} ({tp_pct:.1f}%)"
         )
 
     def register_close(self, trade: Trade):
@@ -130,7 +146,7 @@ class RiskManager:
 
         log.info(
             f"CLOSE {trade.signal_type.value} {trade.symbol} "
-            f"@ {trade.exit_price:.2f} PnL={trade.pnl:+.2f} ({trade.pnl_pct:+.2f}%) "
+            f"@ {_fmt_price(trade.exit_price)} PnL={trade.pnl:+.2f} ({trade.pnl_pct:+.2f}%) "
             f"reason={trade.close_reason} | Balance={self.balance:.2f}"
         )
 

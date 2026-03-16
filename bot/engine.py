@@ -32,7 +32,7 @@ from bot.strategies.bear_strategies import (
     BearScalp,
     BearTrendFollow,
 )
-from bot.strategies.risk_manager import RiskManager
+from bot.strategies.risk_manager import RiskManager, _fmt_price
 from bot.utils.logger import log
 
 
@@ -258,9 +258,9 @@ class TradingEngine:
 
                 log.info(
                     f"  POS {trade.signal_type.value} {trade.symbol} "
-                    f"entry={trade.entry_price:.2f} now={current_price:.2f} "
+                    f"entry={_fmt_price(trade.entry_price)} now={_fmt_price(current_price)} "
                     f"uPnL={unrealized:+.2f} ({pnl_pct:+.1f}%) "
-                    f"SL={trade.stop_loss:.2f} TP={trade.take_profit:.2f}"
+                    f"SL={_fmt_price(trade.stop_loss)} TP={_fmt_price(trade.take_profit)}"
                 )
 
                 # Check stop loss

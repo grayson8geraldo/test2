@@ -15,6 +15,36 @@ import config
 from bot.strategies.base import Signal, SignalType, StrategyName
 
 
+# Minimum SL/TP distances as percentage of price.
+# Prevents ATR-based stops from being too tight on low-price or low-volatility coins.
+MIN_SL_PCT = 1.5   # at least 1.5% from entry for SL
+MIN_TP_PCT = 2.5   # at least 2.5% from entry for TP
+
+
+def _enforce_min_distances(price: float, stop_loss: float, take_profit: float,
+                           direction: str) -> tuple[float, float]:
+    """Ensure SL/TP are at least MIN_SL_PCT / MIN_TP_PCT away from entry."""
+    min_sl_dist = price * MIN_SL_PCT / 100
+    min_tp_dist = price * MIN_TP_PCT / 100
+
+    if direction == "short":
+        # SL is above entry for shorts
+        if stop_loss - price < min_sl_dist:
+            stop_loss = price + min_sl_dist
+        # TP is below entry for shorts
+        if price - take_profit < min_tp_dist:
+            take_profit = price - min_tp_dist
+    else:
+        # SL is below entry for longs
+        if price - stop_loss < min_sl_dist:
+            stop_loss = price - min_sl_dist
+        # TP is above entry for longs
+        if take_profit - price < min_tp_dist:
+            take_profit = price + min_tp_dist
+
+    return stop_loss, take_profit
+
+
 class BearTrendFollow:
     """
     Strategy: Follow the dominant bear trend with short positions.
@@ -70,10 +100,11 @@ class BearTrendFollow:
 
         confidence = min(confidence * self.weight / 0.35, 100)
 
-        # Calculate stops based on ATR
+        # Calculate stops based on ATR with minimum distance enforcement
         atr = last["atr"]
         stop_loss = price + atr * 2.0
         take_profit = price - atr * 3.5
+        stop_loss, take_profit = _enforce_min_distances(price, stop_loss, take_profit, "short")
         rr = abs(price - take_profit) / abs(stop_loss - price) if abs(stop_loss - price) > 0 else 0
 
         if confidence < 40 or rr < config.RISK["min_risk_reward"]:
@@ -184,6 +215,7 @@ class BearMeanReversion:
         stop_loss = price - atr * 1.5
         # Conservative TP for bear bounce: target BB middle or EMA21
         take_profit = min(last["bb_middle"], last["ema_medium"])
+        stop_loss, take_profit = _enforce_min_distances(price, stop_loss, take_profit, "long")
         rr = abs(take_profit - price) / abs(price - stop_loss) if abs(price - stop_loss) > 0 else 0
 
         if confidence < 40 or rr < config.RISK["min_risk_reward"]:
@@ -290,6 +322,7 @@ class BearBreakdown:
         atr = last["atr"]
         stop_loss = price + atr * 1.8
         take_profit = price - atr * 4.0
+        stop_loss, take_profit = _enforce_min_distances(price, stop_loss, take_profit, "short")
         rr = abs(price - take_profit) / abs(stop_loss - price) if abs(stop_loss - price) > 0 else 0
 
         if confidence < 40 or rr < config.RISK["min_risk_reward"]:
@@ -402,6 +435,7 @@ class BearScalp:
             confidence = min(short_score * self.weight / 0.15, 100)
             sl = price + atr * 1.0
             tp = price - atr * 1.5
+            sl, tp = _enforce_min_distances(price, sl, tp, "short")
             rr = abs(price - tp) / abs(sl - price) if abs(sl - price) > 0 else 0
 
             if confidence >= 40 and rr >= 1.2:
@@ -417,6 +451,7 @@ class BearScalp:
             confidence = min(long_score * self.weight / 0.15, 100)
             sl = price - atr * 1.0
             tp = price + atr * 1.5
+            sl, tp = _enforce_min_distances(price, sl, tp, "long")
             rr = abs(tp - price) / abs(price - sl) if abs(price - sl) > 0 else 0
 
             if confidence >= 40 and rr >= 1.2:
