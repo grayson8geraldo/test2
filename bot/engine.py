@@ -248,13 +248,14 @@ class TradingEngine:
                 ticker = await self.exchange.fetch_ticker(trade.symbol)
                 current_price = ticker["last"]
 
-                # Calculate unrealized PnL
+                # Calculate unrealized PnL (leverage already embedded in position size)
                 if trade.signal_type == SignalType.SHORT:
-                    unrealized = (trade.entry_price - current_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+                    unrealized = (trade.entry_price - current_price) * trade.quantity
                 else:
-                    unrealized = (current_price - trade.entry_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+                    unrealized = (current_price - trade.entry_price) * trade.quantity
 
-                pnl_pct = unrealized / (trade.quantity * trade.entry_price / trade.leverage) * 100
+                margin = trade.quantity * trade.entry_price / trade.leverage
+                pnl_pct = unrealized / margin * 100
 
                 log.info(
                     f"  POS {trade.signal_type.value} {trade.symbol} "
@@ -298,18 +299,19 @@ class TradingEngine:
         except Exception as e:
             log.error(f"Error closing position for {trade.symbol}: {e}")
 
-        # Calculate PnL
+        # Calculate PnL (leverage already embedded in position size via qty)
         if trade.signal_type == SignalType.SHORT:
-            pnl = (trade.entry_price - exit_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+            pnl = (trade.entry_price - exit_price) * trade.quantity
         else:
-            pnl = (exit_price - trade.entry_price) / trade.entry_price * trade.quantity * trade.entry_price * trade.leverage
+            pnl = (exit_price - trade.entry_price) * trade.quantity
 
         pnl -= trade.fees
 
         trade.exit_price = exit_price
         trade.exit_time = datetime.utcnow().isoformat()
         trade.pnl = pnl
-        trade.pnl_pct = pnl / (trade.quantity * trade.entry_price / trade.leverage) * 100
+        margin = trade.quantity * trade.entry_price / trade.leverage
+        trade.pnl_pct = pnl / margin * 100
         trade.status = "closed"
         trade.close_reason = reason
 
