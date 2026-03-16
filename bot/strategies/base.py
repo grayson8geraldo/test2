@@ -4,6 +4,25 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+import numpy as np
+
+
+def _sanitize_indicators(d: dict) -> dict:
+    """Convert numpy types to native Python for JSON serialization."""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, (np.integer,)):
+            result[k] = int(v)
+        elif isinstance(v, (np.floating,)):
+            result[k] = float(v)
+        elif isinstance(v, (np.bool_,)):
+            result[k] = bool(v)
+        elif isinstance(v, np.ndarray):
+            result[k] = v.tolist()
+        else:
+            result[k] = v
+    return result
+
 
 class SignalType(Enum):
     LONG = "long"
@@ -34,6 +53,9 @@ class Signal:
     indicators: dict = field(default_factory=dict)
     timestamp: Optional[str] = None
 
+    def __post_init__(self):
+        self.indicators = _sanitize_indicators(self.indicators)
+
     @property
     def is_actionable(self) -> bool:
         return self.signal_type not in (SignalType.NO_SIGNAL,) and self.confidence >= 50
@@ -60,3 +82,7 @@ class Trade:
     indicators_at_entry: dict = field(default_factory=dict)
     indicators_at_exit: dict = field(default_factory=dict)
     close_reason: str = ""  # tp, sl, trailing, signal, manual
+
+    def __post_init__(self):
+        self.indicators_at_entry = _sanitize_indicators(self.indicators_at_entry)
+        self.indicators_at_exit = _sanitize_indicators(self.indicators_at_exit)

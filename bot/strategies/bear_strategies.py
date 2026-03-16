@@ -104,15 +104,18 @@ class BearTrendFollow:
         )
 
     def check_exit(self, df: pd.DataFrame) -> tuple[bool, str]:
-        """Check if an open short should be closed."""
+        """Check if an open short should be closed — only on strong reversal."""
         last = df.iloc[-1]
 
-        if last["rsi"] < 25:
-            return True, "RSI extreme oversold"
-        if last["macd_cross_up"] and last["macd_hist_rising"]:
-            return True, "MACD bullish crossover"
-        if last["rsi_bull_div"]:
-            return True, "Bullish divergence detected"
+        # RSI extreme + confirmed momentum shift
+        if last["rsi"] < 20 and last["macd_hist_rising"]:
+            return True, "RSI extreme oversold + momentum shift"
+        # MACD bullish cross confirmed by RSI turning up from oversold
+        if last["macd_cross_up"] and last["rsi"] < 35 and last["macd_hist_rising"]:
+            return True, "MACD bullish crossover from oversold"
+        # Strong bullish divergence
+        if last["rsi_bull_div"] and last["vol_spike"]:
+            return True, "Bullish divergence + volume spike"
         return False, ""
 
 
@@ -211,14 +214,14 @@ class BearMeanReversion:
         )
 
     def check_exit(self, df: pd.DataFrame) -> tuple[bool, str]:
+        """Exit long bounce — let TP/SL handle most exits."""
         last = df.iloc[-1]
 
-        if last["close"] >= last["bb_middle"]:
-            return True, "Price reached BB middle"
-        if last["close"] >= last["ema_medium"]:
-            return True, "Price reached EMA21"
-        if last["rsi"] > 55:
-            return True, "RSI exited oversold zone"
+        # Only signal exit when RSI shows the bounce is exhausted
+        if last["rsi"] > 60 and last["close"] >= last["bb_middle"]:
+            return True, "Bounce target reached (RSI>60 + BB middle)"
+        if last["rsi"] > 65:
+            return True, "RSI overbought for bounce trade"
         return False, ""
 
 
@@ -320,12 +323,13 @@ class BearBreakdown:
     def check_exit(self, df: pd.DataFrame) -> tuple[bool, str]:
         last = df.iloc[-1]
 
-        if last["vol_ratio"] < 0.5:
-            return True, "Volume exhaustion"
-        if last["rsi"] < 15:
-            return True, "Extreme RSI"
-        if last["bb_pctb"] < -0.3:
-            return True, "Extreme BB deviation"
+        # Only exit on strong reversal signals, not transient conditions
+        if last["rsi"] < 15 and last["macd_hist_rising"]:
+            return True, "Extreme RSI with momentum reversal"
+        if last["rsi_bull_div"]:
+            return True, "Bullish divergence detected"
+        if last["macd_cross_up"] and last["rsi"] < 30:
+            return True, "MACD cross up from oversold"
         return False, ""
 
 
@@ -432,10 +436,7 @@ class BearScalp:
         )
 
     def check_exit(self, df: pd.DataFrame) -> tuple[bool, str]:
-        last = df.iloc[-1]
-        # Scalp exits are primarily via TP/SL, but check stochastic reversal
-        if last["stoch_k"] > 75:
-            return True, "Stoch overbought (long exit)"
-        if last["stoch_k"] < 25:
-            return True, "Stoch oversold (short exit)"
+        """Scalp exits are primarily via TP/SL. Strategy exit only on clear reversal."""
+        # Scalps should rely on TP/SL, not signal-based exits
+        # Only exit on extreme counter-move
         return False, ""
